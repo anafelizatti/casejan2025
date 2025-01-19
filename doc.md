@@ -10,7 +10,7 @@
    3. [Principais Componentes](#principais-componentes)  
 4. [Atributos de Qualidade](#atributos-de-qualidade)  
    1. [Performance (Desempenho)](#performance-desempenho)  
-   2. [Escalabilidade](#escala)  
+   2. [Escalabilidade](#escalabilidade)  
    3. [Disponibilidade](#disponibilidade)  
    4. [Segurança](#segurança)  
    5. [Observabilidade e Monitoramento](#observabilidade-e-monitoramento)  
@@ -33,8 +33,10 @@ Este documento descreve a **arquitetura de software** de um **Sistema de Concess
 - **Objetivos de negócio** (aprovação de limites para clientes).  
 - **Design de microserviços** e **API**.  
 - **Integrações com serviços externos** (histórico de crédito e score).  
-- **Decisões de implementação** (Go, AWS, Terraform).  
+- **Decisões de implementação** (Go, AWS, Terraform, ECS Fargate, JWT).  
 - **Estratégias de desempenho, segurança, logs, monitoramento e escalabilidade**.
+
+As escolhas aqui apresentadas foram feitas seguindo as **melhores práticas** de mercado, considerando aspectos de **custo-benefício**, **simplicidade operacional** e **qualidade** (latência, robustez, segurança e escalabilidade).
 
 ---
 
@@ -53,42 +55,45 @@ A instituição financeira deseja oferecer **limites de crédito** em **tempo re
 
 ## 3. Visão Arquitetural
 
-### Diagrama
-
 ### 3.1 Descrição Geral
 
-- **API Gateway** (AWS API Gateway ou equivalente) como ponto de entrada.  
+- **API Gateway** (AWS API Gateway) como ponto de entrada **REST** (motivação: padrão amplamente adotado, facilita integração e evolução de serviços).  
 - **Microserviços em Golang** para cada subdomínio (Concessão de Cartão, Motor de Regras, Histórico, Score, Investimento).  
 - **Chamadas Síncronas** (REST/HTTPS) para consultas de histórico e score, e para validação de regras.  
 - **Event-driven** para notificar recalcular limite quando ocorre um novo investimento (MS - Investimento emite evento para MS - Concessão de Cartão).
 
 ### 3.2 Diagrama de Containers
-
-![Legenda](./legenda.png)
-![Diagrama](./diagrama.png)
+![legenda](./legenda.png)
+![legenda](./diagrama.png)
 
 ### 3.3 Principais Componentes
 
 1. **API Gateway**:  
-   - Recebe requisições REST/HTTPS, gerenciando autenticação (OAuth2/JWT) e rate limiting.  
+   - Recebe requisições REST/HTTPS, gerenciando autenticação via **JWT** e rate limiting.  
+   - **Motivação**: Permite padronizar entrada de requisições, facilita rotear para cada microserviço e aplicar proteções (DDoS, throttling).  
 
 2. **MS - Concessao de Cartao (Go)**:  
    - Orquestra todo o fluxo de aprovação, chamando o **Motor de Regras** e consultando **Histórico** e **Score** do cliente.  
+   - **Motivação**: Centraliza a decisão final de crédito, mas segue leve e focada, delegando lógica de negócio ao `Motor de Regras`.  
 
 3. **MS - Motor de Regras (Go)**:  
    - Armazena as políticas de crédito (parâmetros de risco, pontuações mínimas, etc.).  
    - Pode ser atualizado com frequência sem impactar outros serviços.  
+   - **Motivação**: Facilita manutenção, governança de regras e escalabilidade independente.  
 
 4. **MS - Historico de Crédito (Go)**:  
-   - Conecta-se a APIs externas de histórico de inadimplências, devoluções, contratos.  
+   - Conecta-se a APIs externas de histórico de inadimplência, devoluções, contratos.  
    - Pode manter um cache local ou em Redis para evitar consultas repetidas.  
+   - **Motivação**: Isolar a complexidade de integrações externas (bureaus) e não sobrecarregar o orquestrador (Concessão de Cartão).  
 
 5. **MS - Score de Crédito (Go)**:  
    - Integra-se a bureaus externos (Serasa, BoaVista, etc.).  
    - Também utiliza estratégias de caching e fallback em caso de indisponibilidade externa.  
+   - **Motivação**: Mesmo princípio de isolamento — foco em um domínio claro (obter e gerenciar score).  
 
 6. **MS - Investimento (Go)**:  
    - Emite eventos sempre que há adesão de investimento, acionando reanálises de crédito.  
+   - **Motivação**: Garantir reavaliação automática e desacoplada do fluxo principal.  
 
 7. **APIs Externas (Histórico/Score)**:  
    - Sistemas de terceiros que retornam dados financeiros.  
@@ -99,37 +104,38 @@ A instituição financeira deseja oferecer **limites de crédito** em **tempo re
 
 ### 4.1 Performance (Desempenho)
 
-- **Go (Golang)**: Binários leves, inicialização rápida e overhead de memória reduzido.  
+- **Golang**: Binários leves, inicialização rápida e overhead de memória reduzido.  
 - **Paralelismo**: Chamadas a serviços de **Histórico** e **Score** podem acontecer em goroutines simultâneas, diminuindo latência.  
 - **Caching**: Redis/ElastiCache para armazenar dados de score/histórico.  
 - **Picos**: Planejar para 600 TPS em cenários de pico, garantindo dimensionamento automático (autoscaling).
 
 ### 4.2 Escalabilidade
 
-- **Auto Scaling**: ECS Fargate ou EKS (Kubernetes) com escalonamento horizontal de contêineres baseado em CPU/RAM/latência.  
-- **Event-driven**: Uso de fila/tópico (SQS, SNS ou Kafka) para processar picos de mensagens (investimentos, disparando reanálises).  
+- **Auto Scaling**: 
+  - **AWS ECS Fargate** (motivação: simplifica gestão de contêineres, não exige provisioning de nós) ajusta horizontalmente contêineres conforme CPU/RAM/latência.  
+- **Event-driven**: Uso de fila/tópico (SQS, SNS) para processar picos de mensagens (investimentos, disparando reanálises).  
 - **Database per Service**: Cada microserviço tem seu próprio armazenamento, evitando contenção num único banco monolítico.
 
 ### 4.3 Disponibilidade
 
-- **SLA 99,9%**: Múltiplas zonas de disponibilidade (AZs).  
+- **SLA 99,9%**: ECS Fargate com réplicas em múltiplas zonas de disponibilidade (AZs).  
 - **Circuit Breaker**: Se APIs externas estiverem indisponíveis ou lentas, usar fallback e evitar saturar o sistema de chamadas.  
 - **Retries**: Retentativas com backoff exponencial em caso de falhas transitórias.
 
 ### 4.4 Segurança
 
-- **Autenticação/Autorização**: API Gateway ou OIDC (OAuth2 + JWT).  
-- **mTLS** (opcional): Comunicação cifrada entre microserviços internos.  
-- **Segredos**: Armazenados no AWS Secrets Manager ou Parameter Store.  
-- **Auditoria**: Logging de cada análise de crédito, com correlação de requisições.
+- **JWT** (motivação: permite token stateless, escalável, e padronizado na indústria).  
+- **API Gateway**: Verifica validade do token JWT e aplica rate limiting.  
+- **Segredos**: Armazenados no AWS Secrets Manager (motivação: segura, nativa da AWS).  
+- **Criptografia em repouso**: Banco RDS (PostgreSQL ou DynamoDB) com KMS (chaves gerenciadas pela AWS).  
+- **Auditoria**: Logging de cada análise de crédito, com correlação de requisições (trace_id).
 
 ### 4.5 Observabilidade e Monitoramento
 
-- **Logs Estruturados**: Em JSON, enviados para CloudWatch ou stack ELK (Elasticsearch, Logstash, Kibana).  
-- **Métricas**: Coletadas via CloudWatch ou Prometheus/Grafana (no EKS) sobre latência, TPS, erros, CPU, memória.  
-- **Tracing Distribuído**: AWS X-Ray ou OpenTelemetry para rastrear requisições entre microserviços.  
-- **Painéis em Tempo Real**: Grafana para dashboards de performance (métricas de latência, volume de eventos, falhas etc.).  
-- **Alertas**: Configurados no CloudWatch Alarms ou Grafana Alerts para notificar via Slack/Email quando métricas fogem de limites (p. ex. latência > 200 ms).  
+- **Logs Estruturados**: Em JSON, enviados para CloudWatch (simplifica correlação com métricas).  
+- **Métricas**: Coletadas via CloudWatch (CPU, memória, TPS, latência), com dashboards integrados ao **Amazon Managed Grafana**.  
+- **Tracing Distribuído**: AWS X-Ray para rastrear requisições entre microserviços.  
+- **Alertas**: Configurados no CloudWatch Alarms e Grafana Alerts (ex.: Slack, e-mail).  
 
 ---
 
@@ -137,98 +143,88 @@ A instituição financeira deseja oferecer **limites de crédito** em **tempo re
 
 ### 5.1 Linguagem e Frameworks
 
-- **Golang**: Conduzido pela alta performance, binários compilados e facilidade de criar serviços leves.  
-- **net/http** ou **Gin**: Para manipulação de rotas REST, com possibilidade de middlewares (auth, logs, etc.).  
-- **Resiliência**: Bibliotecas de circuit breaker e retry, como [gobreaker](https://github.com/sony/gobreaker).
+- **Golang**:  
+  - **Motivação**: Excelente performance, binários leves, concorrência simplificada (goroutines) e inicia rapidamente, mantendo latência baixa em cenários de auto scaling.  
+- **Framework net/http** (ou Gin):  
+  - **Motivação**: net/http nativo é minimalista, confiável e com boa performance; Gin oferece roteamento e middlewares prontos, reduzindo trabalho repetitivo.  
+- **Resiliência**:  
+  - **Motivação**: Evitar falhas cascatas e melhorar robustez. Usar bibliotecas como [gobreaker](https://github.com/sony/gobreaker) para circuit breaker e retry/backoff em integrações externas.
 
 ### 5.2 Infraestrutura como Código (IaC)
 
 - **Terraform**:  
-  - Declara e versiona VPC, Subnets, Security Groups, ECS/EKS, RDS ou DynamoDB, etc.  
-  - Pipelines de “plan” e “apply” para aprovar mudanças.  
+  - **Motivação**: É um padrão de mercado para IaC, provê consistência e versionamento de todo stack AWS (VPC, Subnets, ECS Fargate, RDS, etc.).  
+  - Pipelines de “plan” e “apply” para validar e aprovar mudanças.
 
 ### 5.3 Padrões de Arquitetura
 
-- **Microserviços**: Separando cada domínio crítico (Concessão, Motor de Regras, Histórico, Score, Investimento).  
-- **Event-driven**: Mensagens assíncronas para disparar reavaliação de crédito quando há novo investimento.  
-- **CQRS** (opcional): Pode ser útil separar leituras (score/histórico) de escritas (aprovação de limite).
+- **Microserviços**:  
+  - **Motivação**: Favorece autonomia de times, escalabilidade seletiva e desacoplamento.  
+- **Event-driven**:  
+  - **Motivação**: Assegurar que cada novo investimento seja processado sem bloquear a solicitação do cliente, garantindo flexibilidade para picos de tráfego.  
+- **CQRS** (opcional):  
+  - **Motivação**: Em casos de altas leituras x poucas escritas, separar repositórios/handlers pode melhorar desempenho e simplicidade de consultas.
 
 ### 5.4 Pipelines de CI/CD
 
-- **GitHub Actions ou Jenkins**:  
-  - Compile e teste (unit/integration) a cada push.  
-  - Análise de segurança (GoSec, Dependabot).  
-  - Geração de imagem Docker e push para Amazon ECR.  
-- **Deploy Contínuo**: ECS/EKS, com estratégia **Blue/Green** ou **Rolling Update**.  
-  - Health checks (liveness/readiness) garantem que o novo pod/contêiner esteja saudável.
+- **GitHub Actions** (ou Jenkins):  
+  - **Motivação**: Integra-se facilmente ao repositório GitHub, executa testes (unit/integration), gera imagens Docker e faz push para ECR.  
+- **Deploy Contínuo**: ECS Fargate com **Blue/Green** ou **Rolling Update**:  
+  - **Motivação**: Minimiza downtime, validando a nova versão antes de receber tráfego.  
+- **Testes**:  
+  - **Motivação**: Garantir qualidade e segurança do release, usando testes de carga (K6/Locust), e scanners de segurança (GoSec).
 
 ### 5.5 Estratégia de Logs e Relatório de Erros
 
 1. **Logs Estruturados**  
-   - Formato JSON para cada microserviço, incluindo campos como `timestamp`, `level`, `trace_id`, `service_name`, `error_stack`, etc.  
-   - Facilitam a indexação e consulta nos painéis de observabilidade.
+   - Formato JSON com `timestamp`, `level`, `trace_id`, `service_name`, etc.  
+   - **Motivação**: Facilita indexação e correlação, permite alertas acionáveis.
 
 2. **Coleta de Logs**  
-   - **CloudWatch Logs**: Configurar cada serviço para enviar logs automaticamente via drivers de log do ECS/EKS.  
-   - Em EKS, podemos usar **Fluent Bit/FluentD** para encaminhar logs ao CloudWatch ou ao Elasticsearch.  
+   - **CloudWatch Logs**: Integrado nativamente com ECS Fargate.  
+   - **Motivação**: Simplicidade operacional, não sendo necessário gerenciar infraestrutura de log adicional.
 
 3. **Monitoramento em Tempo Real**  
-   - **Grafana** conectado ao CloudWatch ou Prometheus (se EKS).  
-   - Dashboards para latência média, percentis (p95, p99), TPS por microserviço, número de erros 4xx/5xx etc.  
-   - **Amazon Managed Grafana** ou instância autogerenciada.
+   - **Amazon Managed Grafana** vinculado ao CloudWatch.  
+   - **Motivação**: Dashboards prontos para métricas de CPU, latência, erro etc., sem overhead de instalação de Grafana manual.
 
 4. **Alertas e Notificações**  
-   - Configurar **CloudWatch Alarms** ou alertas do Grafana.  
-   - Integrações com Slack, e-mail ou PagerDuty.  
-   - Exemplos de condições que disparam alertas:  
-     - Latência média > 200 ms por 5 minutos.  
-     - Erros 5xx > 1% em determinado microserviço.  
-     - Fila SQS acima de certo número de mensagens em atraso (indicando backlog).  
+   - **CloudWatch Alarms** + Slack/e-mail.  
+   - **Motivação**: Receber alertas instantâneos para resolução de incidentes.
 
 5. **Relatório de Erros e Exceções**  
-   - Ferramenta de tracking de exceções como Sentry (ou Raygun, ou Rollbar) para capturar stack traces e agrupar erros.  
-   - Envio automático das exceções Golang para um dashboard de erros, com priorização por severidade.
+   - **Sentry** (ou outro) para agrupar stack traces e priorizar falhas.  
+   - **Motivação**: Identificar rapidamente erros sistêmicos, rastrear tendências de falhas e tempo para resolução.
 
 6. **Tracing Distribuído**  
-   - AWS X-Ray ou OpenTelemetry:  
-     - Instrumentar cada microserviço para gerar spans de tracing, vinculando chamadas entre si (concessão -> motor de regras -> histórico/score).  
-   - Útil para debugar latência elevada em cenários complexos.
+   - **AWS X-Ray**:  
+     - **Motivação**: Correlação nativa com serviços AWS, reduz complexidade de setup.  
+   - Permite depurar gargalos e tempo de resposta entre microserviços.
 
 ---
 
 ## 6. Custos e Pontos de Atenção
 
 1. **Custos AWS**  
-   - Uso de ECS/EKS com Fargate pode ficar caro se não houver dimensionamento adequado.  
-   - Ferramentas de observabilidade (Grafana, CloudWatch) também geram custo por volume de dados e retenção de logs/métricas.  
-   - Avaliar RIs (Reserved Instances), Savings Plans ou Spot Instances para economia.
+   - **Fargate** elimina a gestão de EC2, mas pode custar mais em cargas estáveis de longo prazo.  
+   - Observabilidade (CloudWatch, Grafana) gera custos proporcionais ao volume de logs e retenção.  
+   - **Mitigação**: Monitorar uso real, optar por Reserved Instances ou Savings Plans se for previsível.
 
 2. **Complexidade Microserviços**  
-   - Várias linguagens “Go” = mais DevOps, logs distribuídos e orquestração.  
-   - Testes de integração precisam de pipeline robusta com contêineres mock.  
+   - Exige pipelines de CI/CD bem estruturados, logging e tracing distribuídos.  
+   - **Mitigação**: Time DevOps/SRE dedicado, automação de testes, boas práticas de versionamento.
 
 3. **Trade-offs**  
-   - *Go x Java/Kotlin*: Go é ótimo para latência, mas pode demandar bibliotecas adicionais se existirem requisitos corporativos específicos. Java/Kotlin tem ecossistema maior (Spring, Quarkus, etc.).  
-   - *ECS x EKS*: ECS mais simples de gerenciar, EKS (Kubernetes) oferece maior flexibilidade, mas complexidade maior.
+   - **Go x Java/Kotlin**: Go é mais enxuto para microserviços de alta performance, mas Java/Kotlin tem ecossistema amplo.  
+   - **ECS x EKS**: Escolhemos ECS Fargate pela facilidade de adoção e menor curva de aprendizado comparado ao Kubernetes gerenciado.
 
 4. **Conformidade Regulamentar**  
-   - Se for necessário PCI DSS ou LGPD, atenção especial à criptografia de dados em repouso/trânsito, e logs com dados sensíveis (anonimização).
+   - **LGPD/PCI**: Criptografia em repouso (KMS), logs sem dados sensíveis, controlando acesso via IAM.  
+   - Necessário **acompanhamento legal** e auditorias periódicas.
 
 ---
 
-## 7. Conclusão e Próximos Passos
-
-A arquitetura proposta para o **Sistema de Concessão de Crédito** prioriza **baixa latência (~200ms)**, **escalabilidade** (picos de 600 TPS), **segurança** (JWT, OAuth2, logs auditáveis) e **monitoramento em tempo real** (Grafana/CloudWatch). A decisão de usar **Go** traz binários leves e concorrência eficiente, combinada a **AWS** (infra as code com **Terraform**), resultando em **alta disponibilidade** (99,9% SLA).
-
-**Próximos Passos**:
-1. **Implementar** o fluxo de logs estruturados e tracing distribuído, com alarmes configurados no Grafana/CloudWatch.  
-2. **Executar** testes de carga (por exemplo, K6/Locust) para garantir que a latência fique dentro do esperado em cenários de pico.  
-3. **Documentar** e **publishing** (ex.: GitHub, GitLab Pages) para que toda a equipe de desenvolvimento e stakeholders tenham acesso unificado à arquitetura.  
-4. **Refinar** o Motor de Regras e políticas de aprovação conforme feedback do negócio e análise de risco.
-
----
-
-## 8. Referências
+## 7. Referências
 
 - **Microservices Patterns (Chris Richardson)**: [https://microservices.io/patterns](https://microservices.io/patterns)  
 - **AWS Well-Architected Framework**: [https://aws.amazon.com/architecture/well-architected/](https://aws.amazon.com/architecture/well-architected/)  
