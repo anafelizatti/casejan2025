@@ -1,0 +1,87 @@
+workspace "Sistema de Concessao de Credito" "Representacao da Arquitetura em DSL" {
+
+    !identifiers hierarchical
+
+    model {
+        // Atores
+        cliente = person "Cliente" "Usuário que solicita o serviço de crédito."
+
+        // Sistemas Externos (APIs Externas)
+        apiHistoricoExterno = softwareSystem "API Externa de Historico" "Provedor externo de histórico financeiro." {
+            tags "API"
+        }
+        apiScoreExterno = softwareSystem "API Externa de Score" "Provedor externo de score de crédito." {
+            tags "API"
+        }
+
+        // Sistema de Observabilidade (ex.: Grafana, CloudWatch, Prometheus, etc.)
+        observabilidade = softwareSystem "Observabilidade" "Stack de monitoramento e logs (Grafana, Prometheus, CloudWatch, etc.)." {
+            tags "Observability"
+        }
+
+        // Sistema principal de Concessão de Crédito
+        concessaoDeCreditoSystem = softwareSystem "ConcessaoDeCreditoSystem" "Coordena a análise e concessão de crédito." {
+
+            // Containers (microserviços e API Gateway)
+            apiGateway = container "API Gateway" "AWS API Gateway" "Central de entrada de requisições (REST/HTTPS)." {
+                tags "API"
+            }
+
+            msConcessaoCartao = container "MS - Concessao de Cartao" "Go" "Orquestra a concessão de crédito." {
+                tags "Microservice"
+            }
+            msMotorRegras = container "MS - Motor de Regras" "Go" "Processa regras de crédito." {
+                tags "Microservice"
+            }
+            msHistoricoCredito = container "MS - Historico de Crédito" "Go" "Consulta e armazena dados de histórico de crédito." {
+                tags "Microservice"
+            }
+            msScoreCredito = container "MS - Score de Crédito" "Go" "Obtém e gerencia o score de crédito." {
+                tags "Microservice"
+            }
+            msInvestimento = container "MS - Investimento" "Go" "Emite eventos de adesão de investimento." {
+                tags "Microservice"
+            }
+
+            // Relacionamentos internos
+            apiGateway -> msConcessaoCartao "Encaminha requisições de análise (REST/HTTPS)"
+            msConcessaoCartao -> msMotorRegras "Chama lógica de crédito (Síncrono)"
+            msConcessaoCartao -> msHistoricoCredito "Obtém histórico do cliente (Síncrono)"
+            msConcessaoCartao -> msScoreCredito "Consulta score do cliente (Síncrono)"
+            msInvestimento -> msConcessaoCartao "Envia evento para reavaliação (Event-Driven)"
+        }
+
+        // Relacionamentos externos
+        cliente -> concessaoDeCreditoSystem.apiGateway "Solicita serviços de crédito"
+        concessaoDeCreditoSystem.msHistoricoCredito -> apiHistoricoExterno "Consulta dados externos de histórico"
+        concessaoDeCreditoSystem.msScoreCredito -> apiScoreExterno "Consulta dados externos de score"
+        concessaoDeCreditoSystem -> observabilidade "Todos os microserviços enviam logs e métricas"
+    }
+
+    views {
+        container concessaoDeCreditoSystem "concessaoDeCreditoSystem-container" {
+            description "Diagrama de Containers do Sistema de Concessao de Credito com Observabilidade"
+            include *
+        }
+
+        styles {
+            element "Person" {
+                shape person
+                background #999999
+                color #ffffff
+            }
+            element "API" {
+                background #f39c12
+                color #ffffff
+            }
+            element "Microservice" {
+                background #2980b9
+                color #ffffff
+            }
+            element "Observability" {
+                background #27ae60
+                color #ffffff
+            }
+        }
+    }
+}
