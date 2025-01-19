@@ -64,8 +64,8 @@ A instituição financeira deseja oferecer **limites de crédito** em **tempo re
 
 ### 3.2 Diagrama de Containers
 
-![Legenda](./images/lengenda.png)
-![Diagrama](./images/diagrama.png)
+![Legenda](./legenda.png)
+![Diagrama](./diagrama.png)
 
 ### 3.3 Principais Componentes
 
